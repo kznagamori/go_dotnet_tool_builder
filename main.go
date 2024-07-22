@@ -1,98 +1,69 @@
 package main
 
 import (
-	"encoding/xml"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/beevik/etree"
 )
-
-type Project struct {
-	XMLName        xml.Name        `xml:"Project"`
-	PropertyGroups []PropertyGroup `xml:"PropertyGroup"`
-}
-
-type PropertyGroup struct {
-	XMLName  xml.Name  `xml:"PropertyGroup"`
-	Elements []Element `xml:",any"`
-}
-
-type Element struct {
-	XMLName xml.Name
-	Content string `xml:",chardata"`
-}
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <path to csproj file>")
+		fmt.Println("Usage: go run main.go <path-to-csproj>")
 		return
 	}
 
 	csprojPath := os.Args[1]
-	csprojDir := filepath.Dir(csprojPath)
-	csprojBaseName := filepath.Base(csprojPath)
-	toolCommandName := csprojBaseName[:len(csprojBaseName)-len(filepath.Ext(csprojBaseName))]
+	baseName := strings.TrimSuffix(filepath.Base(csprojPath), filepath.Ext(csprojPath))
 
-	// Load csproj file
-	csprojData, err := ioutil.ReadFile(csprojPath)
-	if err != nil {
-		fmt.Println("Error reading csproj file:", err)
+	// .csprojファイルの解析
+	doc := etree.NewDocument()
+	if err := doc.ReadFromFile(csprojPath); err != nil {
+		fmt.Printf("Error reading csproj file: %v\n", err)
 		return
 	}
 
-	var project Project
-	if err := xml.Unmarshal(csprojData, &project); err != nil {
-		fmt.Println("Error unmarshalling csproj file:", err)
+	project := doc.SelectElement("Project")
+	if project == nil {
+		fmt.Println("No <Project> element found in the csproj file.")
 		return
 	}
 
-	// Modify or add elements in PropertyGroup
-	for i := range project.PropertyGroups {
-		pg := &project.PropertyGroups[i]
-		setOrUpdateElement(pg, "OutputType", "Exe")
-		setOrUpdateElement(pg, "PackAsTool", "true")
-		setOrUpdateElement(pg, "ToolCommandName", toolCommandName)
-		setOrUpdateElement(pg, "PackageOutputPath", "./nupkg")
+	// <PropertyGroup>の子エレメントを追加または更新
+	propertyGroups := project.SelectElements("PropertyGroup")
+	for _, propertyGroup := range propertyGroups {
+		updateOrCreateElement(propertyGroup, "OutputType", "Exe")
+		updateOrCreateElement(propertyGroup, "PackAsTool", "true")
+		updateOrCreateElement(propertyGroup, "ToolCommandName", baseName)
+		updateOrCreateElement(propertyGroup, "PackageOutputPath", "./nupkg")
 	}
 
-	// Marshal modified project back to XML
-	modifiedCsprojData, err := xml.MarshalIndent(project, "", "  ")
-	if err != nil {
-		fmt.Println("Error marshalling modified csproj file:", err)
+	// 変更を保存 (インデントを設定)
+	doc.Indent(2)
+	if err := doc.WriteToFile(csprojPath); err != nil {
+		fmt.Printf("Error writing csproj file: %v\n", err)
 		return
 	}
 
-	// Write modified csproj file
-	if err := ioutil.WriteFile(csprojPath, modifiedCsprojData, 0644); err != nil {
-		fmt.Println("Error writing modified csproj file:", err)
+	// バッチファイルの作成
+	batchFilePath := filepath.Join(filepath.Dir(csprojPath), "dotnet_tool_publish.bat")
+	batchFileContent := fmt.Sprintf(`dotnet pack
+dotnet tool install --global --add-source ./nupkg %s`, baseName)
+
+	if err := os.WriteFile(batchFilePath, []byte(batchFileContent), 0644); err != nil {
+		fmt.Printf("Error writing batch file: %v\n", err)
 		return
 	}
 
-	// Create dotnet_tool_publish.bat
-	batFilePath := filepath.Join(csprojDir, "dotnet_tool_publish.bat")
-	batContent := fmt.Sprintf(`@echo off
-dotnet pack
-dotnet tool install --global --add-source ./nupkg %s
-`, toolCommandName)
-
-	if err := os.WriteFile(batFilePath, []byte(batContent), 0644); err != nil {
-		fmt.Println("Error writing batch file:", err)
-		return
-	}
-
-	fmt.Println("Successfully modified csproj file and created dotnet_tool_publish.bat")
+	fmt.Println("dotnet_tool_publish.bat created successfully.")
 }
 
-func setOrUpdateElement(pg *PropertyGroup, name, value string) {
-	for i, elem := range pg.Elements {
-		if elem.XMLName.Local == name {
-			pg.Elements[i].Content = value
-			return
-		}
+func updateOrCreateElement(parent *etree.Element, tag, text string) {
+	element := parent.SelectElement(tag)
+	if element == nil {
+		element = parent.CreateElement(tag)
 	}
-	pg.Elements = append(pg.Elements, Element{
-		XMLName: xml.Name{Local: name},
-		Content: value,
-	})
+	element.SetText(text)
 }
