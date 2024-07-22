@@ -4,7 +4,7 @@ netのツール化
 ## インストール
 
 ```
-go install github.com/kznagamori/go_dotnet_tool_builder
+go install github.com/kznagamori/go_dotnet_tool_builder@latest
 ```
 
 ## 使い方
